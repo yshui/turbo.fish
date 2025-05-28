@@ -4,3 +4,28 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anstream = "0.6.19"
+anstyle = "1.0.11"
+async-channel = "2.3.1"
+async-event = "0.2.1"
+async-fs = "2.1.2"
+async-io = "2.5.0"
+async-signal = "0.2.11"
+bincode = { version = "2.0.1", features = ["serde", "std"], default-features = false }
+blocking = "1.6.1"
+dyn_serde = "1.0.2"
+env_logger = "0.11.8"
+futures-executor = "0.3.31"
+futures-util = "0.3.31"
+git2 = "0.20.2"
+log = "0.4.27"
+paste = "1.0.15"
+rand = "0.9.1"
+rustix = { version = "1.0.7", features = ["process", "fs", "time"] }
+serde = { version = "1.0.219", features = ["derive"] }
+snafu = "0.8.6"
+toml_edit = { version = "0.23.2", features = ["serde"] }
+xdg = "3.0.0"
+
+[profile.release]
+lto = true

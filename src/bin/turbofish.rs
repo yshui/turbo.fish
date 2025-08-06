@@ -208,7 +208,7 @@ async fn serve_once(
     state_file: &Path,
     pid: Pid,
     pg: &OwnedFd,
-) -> Result<(), Whatever> {
+) -> Result<bool, Whatever> {
     let (tx, rx) = async_channel::unbounded();
     let notify: Arc<_> = turbofish::sources::Notify::new().into();
 
@@ -218,16 +218,20 @@ async fn serve_once(
         inner: turbofish::sources::State::init(cfg),
     };
     if !shell_is_alive(pg)? {
-        return Ok(());
+        log::info!("shell exited, quiting");
+        return Ok(true);
     }
     let mut sources = turbofish::sources::start(cfg, &status.path, &tx, &notify)
         .boxed()
         .fuse();
 
-    let mut signal =
-        async_signal::Signals::new([async_signal::Signal::Usr1, async_signal::Signal::Usr2])
-            .whatever_context("create notifying signal")?
-            .fuse();
+    let mut signal = async_signal::Signals::new([
+        async_signal::Signal::Usr1,
+        async_signal::Signal::Usr2,
+        async_signal::Signal::Hup,
+    ])
+    .whatever_context("create notifying signal")?
+    .fuse();
     let mut timer = async_io::Timer::interval(Duration::from_millis(cfg.spinner_interval_ms()));
     loop {
         select! {
@@ -250,6 +254,10 @@ async fn serve_once(
                     async_signal::Signal::Usr2 => {
                         timer.set_interval(Duration::MAX);
                     },
+                    async_signal::Signal::Hup => {
+                        log::info!("got SIGHUP, quiting");
+                        return Ok(true)
+                    },
                     _ => unreachable!()
                 }
             },
@@ -268,7 +276,7 @@ async fn serve_once(
             _ = sources => unreachable!(),
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 async fn serve(cfg: turbofish::sources::Config, state_file: PathBuf) {
@@ -276,8 +284,10 @@ async fn serve(cfg: turbofish::sources::Config, state_file: PathBuf) {
     let ppid = rustix::process::getppid().unwrap();
     let pg = rustix::process::pidfd_open(ppid, PidfdFlags::empty()).unwrap();
     loop {
-        if let Err(e) = serve_once(&cfg, &state_file, ppid, &pg).await {
-            log::error!("serve failed with {e}");
+        match serve_once(&cfg, &state_file, ppid, &pg).await {
+            Err(e) => log::error!("serve failed with {e}"),
+            Ok(false) => (),
+            Ok(true) => break,
         }
 
         if shell_is_alive(&pg).unwrap() {

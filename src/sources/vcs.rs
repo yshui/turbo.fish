@@ -76,6 +76,10 @@ fn default_staged_fg() -> super::Color {
     })
 }
 
+fn default_git_short_hash_min() -> u32 {
+    5
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Config {
     #[serde(default = "default_dirty_bg")]
@@ -90,6 +94,9 @@ pub struct Config {
     staged_bg: super::Color,
     #[serde(default = "default_staged_fg")]
     staged_fg: super::Color,
+    /// Minimal length a git commit hash can be shortened to.
+    #[serde(default = "default_git_short_hash_min")]
+    git_short_hash_min: u32,
 }
 
 impl Default for Config {
@@ -101,6 +108,7 @@ impl Default for Config {
             clean_fg: default_clean_fg(),
             staged_fg: default_staged_fg(),
             staged_bg: default_staged_bg(),
+            git_short_hash_min: default_git_short_hash_min(),
         }
     }
 }
@@ -125,107 +133,135 @@ impl std::fmt::Debug for Source {
     }
 }
 
-async fn process_once(
-    repo: &Arc<Mutex<Repository>>,
-    tx: &mut UpdateSender<Source>,
-) -> Result<(), super::Error> {
-    let dirty: Result<_, super::Error> = unblock({
-        let repo = repo.clone();
-        move || try {
-            let repo = repo.lock().unwrap();
-            let statuses = repo.statuses(None).whatever_context("repo statuses")?;
-            if statuses
-                .iter()
-                .any(|s| s.status() == git2::Status::WT_MODIFIED)
-            {
-                Dirty::Dirty
-            } else if statuses
-                .iter()
-                .any(|s| s.status() == git2::Status::INDEX_MODIFIED)
-            {
-                Dirty::Staged
-            } else {
-                Dirty::Even
+impl Source {
+    async fn process_once(
+        &self,
+        repo: &Arc<Mutex<Repository>>,
+        tx: &mut UpdateSender<Source>,
+    ) -> Result<(), super::Error> {
+        let dirty: Result<_, super::Error> = unblock({
+            let repo = repo.clone();
+            move || try {
+                let repo = repo.lock().unwrap();
+                let statuses = repo.statuses(None).whatever_context("repo statuses")?;
+                if statuses
+                    .iter()
+                    .any(|s| s.status() == git2::Status::WT_MODIFIED)
+                {
+                    Dirty::Dirty
+                } else if statuses
+                    .iter()
+                    .any(|s| s.status() == git2::Status::INDEX_MODIFIED)
+                {
+                    Dirty::Staged
+                } else {
+                    Dirty::Even
+                }
+            }
+        })
+        .await;
+
+        let dirty = whatever!(dirty, "dirty");
+        tx.send(Some(State {
+            dirty: Some(dirty),
+            ..Default::default()
+        }))
+        .await;
+
+        let description: Result<_, super::Error> = unblock({
+            let repo = repo.clone();
+            let min = self.cfg.git_short_hash_min;
+            move || try {
+                let repo = repo.lock().unwrap();
+                let head = repo.head().whatever_context("repo head")?;
+                let head_commit = head.peel_to_commit().whatever_context("peel to commit")?;
+                (!repo.head_detached().whatever_context("head detached")?)
+                    .then(|| head.shorthand())
+                    .flatten()
+                    .map(ToOwned::to_owned)
+                    .or_else(|| {
+                        head_commit
+                            .as_object()
+                            .describe(DescribeOptions::new().describe_tags())
+                            .and_then(|d| d.format(None))
+                            .ok()
+                    })
+                    .unwrap_or_else(|| {
+                        let commit_id = head_commit.id();
+                        let Ok(odb) = repo.odb() else {
+                            return commit_id.to_string();
+                        };
+
+                        for i in min as usize..commit_id.as_ref().len() * 2 {
+                            match odb.exists_prefix(commit_id, i) {
+                                Ok(_) => {
+                                    let mut s = commit_id.to_string();
+                                    s.truncate(i);
+                                    return s;
+                                }
+                                Err(e) if e.code() == git2::ErrorCode::Ambiguous => {
+                                    log::debug!("len {i} is ambiguous");
+                                    continue
+                                },
+                                Err(e) => {
+                                    log::warn!("odb exists_prefix failed: {e}");
+                                    break;
+                                }
+                            }
+                        }
+                        commit_id.to_string()
+                    })
+            }
+        })
+        .await;
+        let description = whatever!(description, "description");
+        tx.send(Some(State {
+            dirty: Some(dirty),
+            description: Some(description),
+            ..Default::default()
+        }))
+        .await;
+        let repo = repo.try_lock().unwrap();
+        let head = repo.head().whatever_context("repo head")?;
+        log::debug!(
+            "{:?} {}",
+            head.name(),
+            repo.head_detached()
+                .whatever_context("repo head_detached")?
+        );
+        if head.is_branch() {
+            let b = git2::Branch::wrap(head);
+            let up = b.upstream().whatever_context("upstream")?;
+            log::debug!("{:?}", up.name());
+            let mut walk = repo.revwalk().whatever_context("revwalk")?;
+
+            let to = b
+                .get()
+                .peel_to_commit()
+                .whatever_context("peel to commit")?
+                .id();
+            let from = up
+                .get()
+                .peel_to_commit()
+                .whatever_context("peel to commit")?
+                .id();
+            log::debug!("{from:?} {to:?}");
+            walk.push(to).whatever_context("revwalk push")?;
+            walk.hide(from).whatever_context("revwalk hide")?;
+            for r in walk {
+                let r = r.whatever_context("revwalk reference")?;
+                log::debug!("{r:?}");
+            }
+            let mut walk = repo.revwalk().whatever_context("revwalk")?;
+            walk.hide(to).whatever_context("revwalk hide")?;
+            walk.push(from).whatever_context("revwalk push")?;
+            for r in walk {
+                let r = r.whatever_context("revwalk reference")?;
+                log::debug!("{r:?}");
             }
         }
-    })
-    .await;
-
-    let dirty = whatever!(dirty, "dirty");
-    tx.send(Some(State {
-        dirty: Some(dirty),
-        ..Default::default()
-    }))
-    .await;
-
-    let description: Result<_, super::Error> = unblock({
-        let repo = repo.clone();
-        move || try {
-            let repo = repo.lock().unwrap();
-            let head = repo.head().whatever_context("repo head")?;
-            let head_commit = head.peel_to_commit().whatever_context("peel to commit")?;
-            (!repo.head_detached().whatever_context("head detached")?)
-                .then(|| head.shorthand())
-                .flatten()
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    head_commit
-                        .as_object()
-                        .describe(DescribeOptions::new().describe_tags())
-                        .and_then(|d| d.format(None))
-                        .ok()
-                })
-                .unwrap_or_else(|| head_commit.id().to_string())
-        }
-    })
-    .await;
-    let description = whatever!(description, "description");
-    tx.send(Some(State {
-        dirty: Some(dirty),
-        description: Some(description),
-        ..Default::default()
-    }))
-    .await;
-    let repo = repo.try_lock().unwrap();
-    let head = repo.head().whatever_context("repo head")?;
-    log::debug!(
-        "{:?} {}",
-        head.name(),
-        repo.head_detached()
-            .whatever_context("repo head_detached")?
-    );
-    if head.is_branch() {
-        let b = git2::Branch::wrap(head);
-        let up = b.upstream().whatever_context("upstream")?;
-        log::debug!("{:?}", up.name());
-        let mut walk = repo.revwalk().whatever_context("revwalk")?;
-
-        let to = b
-            .get()
-            .peel_to_commit()
-            .whatever_context("peel to commit")?
-            .id();
-        let from = up
-            .get()
-            .peel_to_commit()
-            .whatever_context("peel to commit")?
-            .id();
-        log::debug!("{from:?} {to:?}");
-        walk.push(to).whatever_context("revwalk push")?;
-        walk.hide(from).whatever_context("revwalk hide")?;
-        for r in walk {
-            let r = r.whatever_context("revwalk reference")?;
-            log::debug!("{r:?}");
-        }
-        let mut walk = repo.revwalk().whatever_context("revwalk")?;
-        walk.hide(to).whatever_context("revwalk hide")?;
-        walk.push(from).whatever_context("revwalk push")?;
-        for r in walk {
-            let r = r.whatever_context("revwalk reference")?;
-            log::debug!("{r:?}");
-        }
+        Ok(())
     }
-    Ok(())
 }
 impl super::Source for Source {
     type State = State;
@@ -247,7 +283,7 @@ impl super::Source for Source {
         async move {
             loop {
                 if let Some(r) = &self.repository {
-                    log_result("git", process_once(r, &mut tx).await);
+                    log_result("git", self.process_once(r, &mut tx).await);
                 }
                 tx.send(None).await;
                 waiter.wait().await;

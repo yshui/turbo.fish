@@ -80,7 +80,7 @@ fn log_result<E: std::fmt::Display>(name: &str, result: Result<(), E>) {
     }
 }
 
-pub mod git;
+pub mod vcs;
 pub mod nix;
 pub mod short_path;
 pub mod spinner;
@@ -270,7 +270,7 @@ macro_rules! define_sources {
 
 define_sources! {
     struct Sources {
-        git: git::Source,
+        vcs: vcs::Source,
         short_path: short_path::Source,
         status: status::Source,
         nix: nix::Source,

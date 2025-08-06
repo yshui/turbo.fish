@@ -340,6 +340,11 @@ fn render(
     path: Option<PathBuf>,
 ) -> Result<(), Whatever> {
     let ppid = rustix::process::getppid().unwrap();
+    let separator_chars = cfg
+        .global_config()
+        .separator_chars
+        .chars()
+        .collect::<Vec<_>>();
     let turbofish_pid = std::env::var("__TURBO_FISH_PID")
         .ok()
         .and_then(|pid| pid.parse().ok())
@@ -377,22 +382,32 @@ fn render(
             print!("{:#}{}", segment.style, next_segment.style);
             continue;
         }
-        if segment.style.get_bg_color() == next_segment.style.get_bg_color() {
+        if segment.style.get_bg_color() == next_segment.style.get_bg_color()
+            && separator_chars.len() > 1
+        {
+            let fg = segment
+                .style
+                .get_bg_color()
+                .map(turbofish::sources::Color::from)
+                .map(|c| c.invert().into())
+                .unwrap_or(anstyle::AnsiColor::BrightWhite.into());
             let separator_style = anstyle::Style::new()
                 .bg_color(segment.style.get_bg_color())
-                .fg_color(Some(anstyle::AnsiColor::BrightWhite.into()));
+                .fg_color(Some(fg));
             print!(
-                " {:#}{separator_style}{separator_style:#}{} ",
-                segment.style, next_segment.style
+                " {:#}{separator_style}{}{separator_style:#}{} ",
+                segment.style, separator_chars[1], next_segment.style
             );
-        } else {
+        } else if !separator_chars.is_empty() {
             let separator_style = anstyle::Style::new()
                 .fg_color(segment.style.get_bg_color())
                 .bg_color(next_segment.style.get_bg_color());
             print!(
-                " {:#}{separator_style}{} ",
-                segment.style, next_segment.style
+                " {:#}{separator_style}{}{} ",
+                segment.style, separator_chars[0], next_segment.style
             );
+        } else {
+            print!(" {:#}{} ", segment.style, next_segment.style);
         }
     }
     println!();

@@ -86,14 +86,24 @@ pub mod short_path;
 pub mod spinner;
 pub mod status;
 
+fn default_separator_chars() -> String {
+    "".into()
+}
+
 /// Global configs
 #[derive(Serialize, Deserialize, Debug)]
-struct GlobalConfig {
+pub struct GlobalConfig {
+    /// Character used as separators. One or two characters. If two
+    /// characters are provided, the second one will be used when the
+    /// two adjacent segments have the same background color.
+    #[serde(default = "default_separator_chars")]
+    pub separator_chars: String,
 }
 
 impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
+            separator_chars: default_separator_chars(),
         }
     }
 }
@@ -185,6 +195,9 @@ macro_rules! define_sources {
                     .collect();
 
                 Ok(cfg)
+            }
+            pub fn global_config(&self) -> &GlobalConfig {
+                &self.global_config
             }
         }
 

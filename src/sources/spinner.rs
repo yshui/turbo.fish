@@ -35,6 +35,10 @@ fn default_interval_ms() -> u64 {
     100
 }
 
+fn default_delay_ms() -> u64 {
+    150
+}
+
 fn default_ticker() -> String {
     "⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈ ".into()
 }
@@ -47,6 +51,8 @@ pub(crate) struct Config {
     bg: super::Color,
     #[serde(default = "default_interval_ms")]
     interval_ms: u64,
+    #[serde(default = "default_delay_ms")]
+    delay_ms: u64,
     #[serde(default = "default_ticker")]
     ticker: String,
 }
@@ -56,6 +62,7 @@ impl Default for Config {
         Self {
             fg: default_spinner_fg(),
             bg: default_spinner_bg(),
+            delay_ms: default_delay_ms(),
             interval_ms: default_interval_ms(),
             ticker: default_ticker(),
         }
@@ -91,7 +98,7 @@ impl super::Source for Source {
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
         let now = ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000;
         let elapsed = (now - state.start).unsigned_abs();
-        if elapsed < self.cfg.interval_ms * 3 {
+        if elapsed < self.cfg.delay_ms {
             return vec![];
         }
         vec![super::Segment {

@@ -198,8 +198,8 @@ fn shell_is_alive(pidfd: &OwnedFd) -> Result<bool, Whatever> {
             tv_nsec: 0,
         }),
     ) {
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(false),
+        Ok(0) => Ok(true),
+        Ok(_) => Ok(false),
         Err(e) => bail_whatever!(e, "poll"),
     }
 }

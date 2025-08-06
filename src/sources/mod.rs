@@ -1,15 +1,12 @@
-use async_channel::{SendError, Sender};
-use dyn_serde::ser;
-use futures_util::{Stream, stream::FuturesUnordered};
+use async_channel::Sender;
+use futures_util::stream::FuturesUnordered;
 use paste::paste;
 use serde::{Deserialize, Serialize};
 use std::{
-    future::Future,
     marker::PhantomData,
     path::Path,
-    pin::Pin,
     sync::{
-        self, Arc,
+        Arc,
         atomic::{self, AtomicU64},
     },
 };
@@ -52,6 +49,12 @@ impl Notify {
     }
 }
 
+impl Default for Notify {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct Waiter {
     notify: Arc<Notify>,
     revision: u64,
@@ -78,10 +81,10 @@ fn log_result<E: std::fmt::Display>(name: &str, result: Result<(), E>) {
 }
 
 pub mod git;
-pub mod short_path;
-pub mod status;
 pub mod nix;
+pub mod short_path;
 pub mod spinner;
+pub mod status;
 
 /// Global configs
 #[derive(Serialize, Deserialize, Debug)]
@@ -329,7 +332,6 @@ impl<'de> serde::Deserialize<'de> for Rgb {
     {
         try {
             let s = <String as serde::Deserialize<'_>>::deserialize(deserializer);
-            log::debug!("ASDF {s:?}");
 
             let s = s?;
             let s = s
@@ -410,11 +412,15 @@ impl serde::Serialize for Ansi {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&format!(
-            "{}{}",
-            if self.code > 7 { "bright" } else { "" },
-            ANSI_NAMES[(self.code & 7) as usize]
-        ))
+        if self.named {
+            serializer.serialize_str(&format!(
+                "{}{}",
+                if self.code > 7 { "bright" } else { "" },
+                ANSI_NAMES[(self.code & 7) as usize]
+            ))
+        } else {
+            serializer.serialize_u8(self.code)
+        }
     }
 }
 

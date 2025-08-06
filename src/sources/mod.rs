@@ -279,21 +279,21 @@ define_sources! {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Rgb {
+pub struct Rgb {
     r: u8,
     g: u8,
     b: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Ansi {
+pub struct Ansi {
     code: u8,
     named: bool,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Copy)]
 #[serde(untagged)]
-enum Color {
+pub enum Color {
     Rgb(Rgb),
     Ansi(Ansi),
 }
@@ -314,6 +314,14 @@ impl Color {
             b: (rgb.b as f32 * frac) as u8,
         })
     }
+    pub fn invert(self) -> Self {
+        let rgb = self.into_rgb();
+        Self::Rgb(Rgb {
+            r: 255 - rgb.r,
+            g: 255 - rgb.g,
+            b: 255 - rgb.b,
+        })
+    }
 }
 
 impl From<Color> for anstyle::Color {
@@ -321,6 +329,26 @@ impl From<Color> for anstyle::Color {
         match value {
             Color::Rgb(rgb) => anstyle::Color::Rgb(anstyle::RgbColor(rgb.r, rgb.g, rgb.b)),
             Color::Ansi(ansi) => anstyle::Color::Ansi256(anstyle::Ansi256Color(ansi.code)),
+        }
+    }
+}
+
+impl From<anstyle::Color> for Color {
+    fn from(value: anstyle::Color) -> Self {
+        match value {
+            anstyle::Color::Ansi(ansi) => Self::Ansi(Ansi {
+                code: ansi as u8,
+                named: true,
+            }),
+            anstyle::Color::Ansi256(ansi256) => Self::Ansi(Ansi {
+                code: ansi256.0,
+                named: false,
+            }),
+            anstyle::Color::Rgb(rgb) => Self::Rgb(Rgb {
+                r: rgb.r(),
+                g: rgb.g(),
+                b: rgb.b(),
+            }),
         }
     }
 }
@@ -363,18 +391,38 @@ const ANSI_NAMES: &[&str] = &[
     "black", "red", "green", "yellow", "blue", "purple", "cyan", "white",
 ];
 
+const BASE_6_COLOR_RAMP: &[u8] = &[0, 95, 135, 175, 215, 255];
+
 impl Ansi {
     pub fn into_rgb(self) -> Rgb {
-        let base = if self.code > 8 {
-            self.code - 8
+        if self.code < 16 {
+            let base = if self.code > 8 {
+                self.code - 8
+            } else {
+                self.code
+            };
+            let intensity = if self.code > 8 { 255 } else { 205 };
+            Rgb {
+                r: (base & 1) * intensity,
+                g: (base & 2) / 2 * intensity,
+                b: (base & 4) / 4 * intensity,
+            }
+        } else if self.code < 232 {
+            // base-6 encoded rgb
+            let base = self.code - 16;
+            Rgb {
+                b: BASE_6_COLOR_RAMP[(base % 6) as usize],
+                g: BASE_6_COLOR_RAMP[(base / 6 % 6) as usize],
+                r: BASE_6_COLOR_RAMP[(base / 36) as usize],
+            }
         } else {
-            self.code
-        };
-        let intensity = if self.code > 8 { 255 } else { 205 };
-        Rgb {
-            r: (base & 1) * intensity,
-            g: (base & 2) / 2 * intensity,
-            b: (base & 4) / 4 * intensity,
+            // grey scale
+            let base = self.code - 232;
+            Rgb {
+                r: 8 + base * 10,
+                g: 8 + base * 10,
+                b: 8 + base * 10,
+            }
         }
     }
 }

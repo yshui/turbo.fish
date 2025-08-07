@@ -1,4 +1,5 @@
 #![feature(try_blocks)]
+use async_io::Async;
 use async_signal_with_info::Signal;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, whatever};
@@ -29,8 +30,7 @@ use bincode::error::EncodeError;
 use futures_util::{FutureExt, StreamExt, pin_mut, select, task::LocalSpawnExt};
 use rand::Rng;
 use rustix::{
-    event::{PollFd, PollFlags},
-    fs::{AtFlags, CWD, Mode, OFlags, Timespec},
+    fs::{AtFlags, CWD, Mode, OFlags},
     process::{Pid, PidfdFlags},
 };
 
@@ -199,24 +199,11 @@ fn read_state_file(path: &Path, cwd: &Path) -> Result<State, Whatever> {
         }
     }
 }
-fn shell_is_alive(pidfd: &OwnedFd) -> Result<bool, Whatever> {
-    match rustix::event::poll(
-        &mut [PollFd::new(&pidfd, PollFlags::IN)],
-        Some(&Timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        }),
-    ) {
-        Ok(0) => Ok(true),
-        Ok(_) => Ok(false),
-        Err(e) => bail_whatever!(e, "poll"),
-    }
-}
 async fn serve_once(
     cfg: &turbofish::sources::Config,
     state_file: &Path,
     pid: Pid,
-    pg: &OwnedFd,
+    pg: &Async<OwnedFd>,
 ) -> Result<bool, Whatever> {
     let mut version = 0u32;
     let mut status = State {
@@ -225,10 +212,6 @@ async fn serve_once(
         inner: turbofish::sources::State::default(),
         version: None,
     };
-    if !shell_is_alive(pg)? {
-        log::info!("shell exited, quiting");
-        return Ok(true);
-    }
     let sources = turbofish::sources::Sources::new(cfg, &status.path);
 
     let mut signal =
@@ -251,7 +234,7 @@ async fn serve_once(
                         .whatever_context("error reading signal")?;
                     let new_path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
                         .whatever_context("read_link cwd")?;
-                    if !shell_is_alive(pg)? || new_path != status.path {
+                    if new_path != status.path {
                         break 'outer;
                     }
                     match sig {
@@ -282,6 +265,10 @@ async fn serve_once(
                     }
                 },
                 _ = timer.next() => true,
+                _ = pg.readable().fuse() => {
+                    log::info!("parent shell terminated, quiting");
+                    return Ok(true)
+                },
                 msg = rx.next() => {
                     log::debug!("{msg:?}");
                     if let Some(msg) = msg {
@@ -313,18 +300,23 @@ async fn serve(cfg: turbofish::sources::Config, state_file: PathBuf) {
     let _cleanup = AutoDeleteTmp(Some(&state_file));
     let ppid = rustix::process::getppid().unwrap();
     let pg = rustix::process::pidfd_open(ppid, PidfdFlags::empty()).unwrap();
+    let pg = Async::new(pg).unwrap();
     loop {
         match serve_once(&cfg, &state_file, ppid, &pg).await {
-            Err(e) => log::error!("serve failed with {e}"),
+            Err(e) => {
+                // If we got an error, we might not have had a chance to check
+                // `pg`'s readability yet. So do it here.
+                if pg
+                    .poll_readable(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+                    .is_ready()
+                {
+                    log::info!("parent shell terminated, quiting");
+                    break;
+                }
+                log::error!("serve failed with {e}");
+            }
             Ok(false) => (),
             Ok(true) => break,
-        }
-
-        if shell_is_alive(&pg).unwrap() {
-            log::info!("resettng...");
-        } else {
-            log::info!("parent shell terminated");
-            break;
         }
     }
 }

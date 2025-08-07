@@ -8,7 +8,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::sources::{GlobalConfig, UpdateSender};
+use crate::{
+    color::{Ansi, Color, Rgb},
+    sources::{GlobalConfig, UpdateSender},
+};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 struct PathSegment {
@@ -76,16 +79,16 @@ impl State {
     }
 }
 
-fn default_path_bg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_path_bg() -> Color {
+    Color::Rgb(Rgb {
         r: 0x33,
         g: 0x33,
         b: 0x33,
     })
 }
 
-fn default_path_fg() -> super::Color {
-    super::Color::Ansi(super::Ansi {
+fn default_path_fg() -> Color {
+    Color::Ansi(Ansi {
         code: 7,
         named: true,
     })
@@ -108,9 +111,9 @@ fn default_highlight_patterns() -> Vec<String> {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Config {
     #[serde(default = "default_path_bg")]
-    bg: super::Color,
+    bg: Color,
     #[serde(default = "default_path_fg")]
-    fg: super::Color,
+    fg: Color,
     /// Whether the last component of the path should be abbreviated as well.
     #[serde(default)]
     abbreviate_basename: bool,

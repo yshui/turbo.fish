@@ -1,22 +1,25 @@
 use serde::{Deserialize, Serialize};
 
-use crate::sources::UpdateSender;
+use crate::{
+    color::{Ansi, Color, Rgb},
+    sources::UpdateSender,
+};
 
 #[derive(Debug)]
 pub struct Source {
     cfg: Config,
 }
 
-fn default_jobs_fg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_jobs_fg() -> Color {
+    Color::Rgb(Rgb {
         r: 0x25,
         g: 0x5e,
         b: 0x87,
     })
 }
 
-fn default_nonzero_fg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_nonzero_fg() -> Color {
+    Color::Rgb(Rgb {
         r: 0xce,
         g: 0,
         b: 0xf,
@@ -27,8 +30,8 @@ fn default_jobs_symbol() -> String {
     "%".into()
 }
 
-fn default_status_bg() -> super::Color {
-    super::Color::Ansi(super::Ansi {
+fn default_status_bg() -> Color {
+    Color::Ansi(Ansi {
         code: 15,
         named: true,
     })
@@ -37,11 +40,11 @@ fn default_status_bg() -> super::Color {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Config {
     #[serde(default = "default_status_bg")]
-    bg: super::Color,
+    bg: Color,
     #[serde(default = "default_jobs_fg")]
-    jobs_fg: super::Color,
+    jobs_fg: Color,
     #[serde(default = "default_nonzero_fg")]
-    nonzero_fg: super::Color,
+    nonzero_fg: Color,
     #[serde(default)]
     show_count: bool,
     #[serde(default = "default_jobs_symbol")]

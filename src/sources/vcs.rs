@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::color::{Ansi, Color, Rgb};
 use blocking::unblock;
 use git2::{DescribeOptions, Repository};
 use serde::{Deserialize, Serialize};
@@ -28,47 +29,47 @@ pub struct State {
     behind: Option<Option<u64>>,
 }
 
-fn default_dirty_bg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_dirty_bg() -> Color {
+    Color::Rgb(Rgb {
         r: 0xce,
         g: 0,
         b: 0xf,
     })
 }
 
-fn default_dirty_fg() -> super::Color {
-    super::Color::Ansi(super::Ansi {
+fn default_dirty_fg() -> Color {
+    Color::Ansi(Ansi {
         code: 15,
         named: true,
     })
 }
 
-fn default_clean_bg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_clean_bg() -> Color {
+    Color::Rgb(Rgb {
         r: 0xad,
         g: 0xdc,
         b: 0x10,
     })
 }
 
-fn default_clean_fg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_clean_fg() -> Color {
+    Color::Rgb(Rgb {
         r: 0xc,
         g: 0x48,
         b: 0x1,
     })
 }
 
-fn default_staged_bg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_staged_bg() -> Color {
+    Color::Rgb(Rgb {
         r: 0xf6,
         g: 0xb1,
         b: 0x17,
     })
 }
 
-fn default_staged_fg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_staged_fg() -> Color {
+    Color::Rgb(Rgb {
         r: 0x3a,
         g: 0x2a,
         b: 0x3,
@@ -82,17 +83,17 @@ fn default_git_short_hash_min() -> u32 {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Config {
     #[serde(default = "default_dirty_bg")]
-    dirty_bg: super::Color,
+    dirty_bg: Color,
     #[serde(default = "default_dirty_fg")]
-    dirty_fg: super::Color,
+    dirty_fg: Color,
     #[serde(default = "default_clean_bg")]
-    clean_bg: super::Color,
+    clean_bg: Color,
     #[serde(default = "default_clean_fg")]
-    clean_fg: super::Color,
+    clean_fg: Color,
     #[serde(default = "default_staged_bg")]
-    staged_bg: super::Color,
+    staged_bg: Color,
     #[serde(default = "default_staged_fg")]
-    staged_fg: super::Color,
+    staged_fg: Color,
     /// Minimal length a git commit hash can be shortened to.
     #[serde(default = "default_git_short_hash_min")]
     git_short_hash_min: u32,

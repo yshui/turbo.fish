@@ -430,7 +430,7 @@ fn render(
             let fg = segment
                 .style
                 .get_bg_color()
-                .map(turbofish::sources::Color::from)
+                .map(turbofish::color::Color::from)
                 .map(|c| c.invert().into())
                 .unwrap_or(anstyle::AnsiColor::BrightWhite.into());
             let separator_style = anstyle::Style::new()

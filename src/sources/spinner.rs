@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::sources::UpdateSender;
+use crate::{
+    color::{Ansi, Color, Rgb},
+    sources::UpdateSender,
+};
 #[derive(Debug)]
 pub(crate) struct Source {
     ticker: Vec<char>,
@@ -18,15 +21,15 @@ pub(crate) struct State {
     start: i64,
 }
 
-fn default_spinner_fg() -> super::Color {
-    super::Color::Ansi(super::Ansi {
+fn default_spinner_fg() -> Color {
+    Color::Ansi(Ansi {
         code: 7,
         named: true,
     })
 }
 
-fn default_spinner_bg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_spinner_bg() -> Color {
+    Color::Rgb(Rgb {
         r: 130,
         g: 20,
         b: 180,
@@ -48,9 +51,9 @@ fn default_ticker() -> String {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct Config {
     #[serde(default = "default_spinner_fg")]
-    fg: super::Color,
+    fg: Color,
     #[serde(default = "default_spinner_bg")]
-    bg: super::Color,
+    bg: Color,
     #[serde(default = "default_interval_ms")]
     interval_ms: u64,
     #[serde(default = "default_delay_ms")]

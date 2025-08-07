@@ -1,19 +1,22 @@
 use serde::{Deserialize, Serialize};
 
-use crate::sources::UpdateSender;
+use crate::{
+    color::{Color, Rgb},
+    sources::UpdateSender,
+};
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State;
 
-fn default_nix_bg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_nix_bg() -> Color {
+    Color::Rgb(Rgb {
         r: 0,
         g: 0x5f,
         b: 0xaf,
     })
 }
-fn default_nix_fg() -> super::Color {
-    super::Color::Rgb(super::Rgb {
+fn default_nix_fg() -> Color {
+    Color::Rgb(Rgb {
         r: 0xcc,
         g: 0xcc,
         b: 0xcc,
@@ -23,9 +26,9 @@ fn default_nix_fg() -> super::Color {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Config {
     #[serde(default = "default_nix_fg")]
-    fg: super::Color,
+    fg: Color,
     #[serde(default = "default_nix_bg")]
-    bg: super::Color,
+    bg: Color,
 }
 
 impl Default for Config {

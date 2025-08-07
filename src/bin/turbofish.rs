@@ -1,14 +1,16 @@
 #![feature(try_blocks)]
+use async_signal_with_info::Signal;
 use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, whatever};
 use std::{
+    ffi::c_void,
     io::ErrorKind,
     os::{
         fd::{AsFd as _, AsRawFd as _, OwnedFd},
         unix::ffi::OsStrExt,
     },
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -24,7 +26,7 @@ impl Drop for AutoDeleteTmp<'_> {
 type Whatever = turbofish::sources::Error;
 
 use bincode::error::EncodeError;
-use futures_util::{FutureExt, StreamExt, select, task::LocalSpawnExt};
+use futures_util::{FutureExt, StreamExt, pin_mut, select, task::LocalSpawnExt};
 use rand::Rng;
 use rustix::{
     event::{PollFd, PollFlags},
@@ -111,6 +113,10 @@ fn state_file_path() -> Result<PathBuf, Whatever> {
 struct State {
     path: PathBuf,
     inner: turbofish::sources::State,
+    /// A version tag, `None` if update is still in progress. Only makes sense
+    /// if matches the cwd of the renderer, because otherwise the renderer will disregard
+    /// this `State`.
+    version: Option<u32>,
 }
 
 macro_rules! bail_whatever {
@@ -169,7 +175,7 @@ fn write_state_file(path: &Path, data: &State) -> Result<(), Whatever> {
     }
     Ok(())
 }
-fn read_state_file(path: &Path, cwd: &Path) -> Result<turbofish::sources::State, Whatever> {
+fn read_state_file(path: &Path, cwd: &Path) -> Result<State, Whatever> {
     try {
         log::debug!("{}", path.display());
         let f = rustix::fs::openat(
@@ -184,9 +190,12 @@ fn read_state_file(path: &Path, cwd: &Path) -> Result<turbofish::sources::State,
             bincode::serde::decode_from_std_read(&mut f, bincode::config::standard())
                 .whatever_context("decode state file")?;
         if state.path == cwd {
-            state.inner
+            state
         } else {
-            Default::default()
+            State {
+                path: cwd.to_path_buf(),
+                ..Default::default()
+            }
         }
     }
 }
@@ -209,71 +218,92 @@ async fn serve_once(
     pid: Pid,
     pg: &OwnedFd,
 ) -> Result<bool, Whatever> {
-    let (tx, rx) = async_channel::unbounded();
-    let notify: Arc<_> = turbofish::sources::Notify::new().into();
-
+    let mut version = 0u32;
     let mut status = State {
         path: std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
             .whatever_context("read_link cwd")?,
-        inner: turbofish::sources::State::init(cfg),
+        inner: turbofish::sources::State::default(),
+        version: None,
     };
     if !shell_is_alive(pg)? {
         log::info!("shell exited, quiting");
         return Ok(true);
     }
-    let mut sources = turbofish::sources::start(cfg, &status.path, &tx, &notify)
-        .boxed()
-        .fuse();
+    let sources = turbofish::sources::Sources::new(cfg, &status.path);
 
-    let mut signal = async_signal::Signals::new([
-        async_signal::Signal::Usr1,
-        async_signal::Signal::Usr2,
-        async_signal::Signal::Hup,
-    ])
-    .whatever_context("create notifying signal")?
-    .fuse();
-    let mut timer = async_io::Timer::interval(Duration::from_millis(cfg.spinner_interval_ms()));
-    loop {
-        select! {
-            s = signal.next() => {
-                let s: async_signal::Signal = s
-                    .whatever_context("signal stream ended")?
-                    .whatever_context("error reading signal")?;
-                let new_path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
-                    .whatever_context("read_link cwd")?;
-                if !shell_is_alive(pg)? || new_path != status.path {
-                    break;
-                }
-                match s {
-                    async_signal::Signal::Usr1 => {
-                        timer.set_interval(Duration::from_millis(cfg.spinner_interval_ms()));
-                        status.inner.clear_completed_sources();
+    let mut signal =
+        async_signal_with_info::Signals::new([Signal::Usr1, Signal::Usr2, Signal::Hup])
+            .whatever_context("create notifying signal")?
+            .fuse();
+    'outer: loop {
+        let mut timer = <_ as StreamExt>::fuse(async_io::Timer::interval(Duration::from_millis(
+            cfg.spinner_interval_ms(),
+        )));
+        let (tx, rx) = async_channel::unbounded();
+        let mut jobs = turbofish::sources::start(&sources, tx).boxed().fuse();
+        pin_mut!(rx);
+        loop {
+            let updated = select! {
+                s = signal.next() => {
+                    let (sig, info) = s
+                        .whatever_context("signal stream ended")?;
+                    let sig = sig
+                        .whatever_context("error reading signal")?;
+                    let new_path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
+                        .whatever_context("read_link cwd")?;
+                    if !shell_is_alive(pg)? || new_path != status.path {
+                        break 'outer;
+                    }
+                    match sig {
+                        Signal::Usr1 => {
+                            status.version = None;
+                            write_state_file(state_file, &status)?;
+                            version = version.wrapping_add(1);
+                            rustix::process::pidfd_send_signal(pg, rustix::process::Signal::USR1)
+                                .whatever_context("signal shell redraw")?;
+                            // restart source updates. if `jobs` haven't completed yet, they will
+                            // be dropped and cancelled. update channels will be recreated too, to
+                            // avoid stale updates confusing us.
+                            break;
+                        },
+                        Signal::Usr2 => {
+                            if unsafe { info.si_value().sival_ptr } as usize as u32 == version {
+                                // We only stop the timer if the renderer has rendered the latest
+                                // version of the state file.
+                                timer.get_mut().set_interval(Duration::MAX);
+                            }
+                            false
+                        },
+                        Signal::Hup => {
+                            log::info!("got SIGHUP, quiting");
+                            return Ok(true)
+                        },
+                        _ => unreachable!()
+                    }
+                },
+                _ = timer.next() => true,
+                msg = rx.next() => {
+                    log::debug!("{msg:?}");
+                    if let Some(msg) = msg {
+                        status.inner.update(msg);
                         write_state_file(state_file, &status)?;
-                        notify.notify_all();
-                    },
-                    async_signal::Signal::Usr2 => {
-                        timer.set_interval(Duration::MAX);
-                    },
-                    async_signal::Signal::Hup => {
-                        log::info!("got SIGHUP, quiting");
-                        return Ok(true)
-                    },
-                    _ => unreachable!()
+                        true
+                    } else {
+                        false
+                    }
                 }
-            },
-            _ = timer.next().fuse() => {
-                rustix::process::pidfd_send_signal(pg, rustix::process::Signal::USR1)
-                    .whatever_context("signal shell redraw")?;
-            },
-            msg = rx.recv().fuse() => {
-                let msg = msg.unwrap();
-                log::debug!("{msg:?}");
-                status.inner.update(msg);
-                write_state_file(state_file, &status)?;
+                // `jobs` completion means all update jobs are finished, we can set the version
+                // tag in state.
+                _ = jobs => {
+                    status.version = Some(version);
+                    write_state_file(state_file, &status)?;
+                    true
+                }
+            };
+            if updated {
                 rustix::process::pidfd_send_signal(pg, rustix::process::Signal::USR1)
                     .whatever_context("signal shell redraw")?;
             }
-            _ = sources => unreachable!(),
         }
     }
     Ok(false)
@@ -304,7 +334,6 @@ async fn debug_state(
     path: Option<PathBuf>,
 ) -> Result<(), Whatever> {
     let (tx, rx) = async_channel::unbounded();
-    let notify: Arc<_> = turbofish::sources::Notify::new().into();
     let pid = rustix::process::getppid().unwrap();
 
     log::debug!("{path:?}");
@@ -315,25 +344,18 @@ async fn debug_state(
             std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
                 .whatever_context("read_link cwd")?
         },
-        inner: turbofish::sources::State::init(&cfg),
+        inner: turbofish::sources::State::default(),
+        version: None,
     };
-    let mut sources = turbofish::sources::start(&cfg, &status.path, &tx, &notify)
-        .boxed()
-        .fuse();
+    let sources = turbofish::sources::Sources::new(&cfg, &status.path);
+    turbofish::sources::start(&sources, tx).await;
 
-    loop {
-        select! {
-            msg = rx.recv().fuse() => {
-                let msg = msg.unwrap();
-                log::debug!("{msg:?}");
-                status.inner.update(msg);
-                if status.inner.completed_sources_count() == status.inner.enabled_sources_count() {
-                    break;
-                }
-            }
-            _ = sources => unreachable!(),
-        }
+    while let Ok(msg) = rx.recv().await {
+        log::debug!("{msg:?}");
+        status.inner.update(msg);
     }
+    status.version = Some(0);
+    log::debug!("final state: {status:?}");
     write_state_file(
         std::env::args()
             .nth(2)
@@ -342,6 +364,17 @@ async fn debug_state(
         &status,
     )?;
     Ok(())
+}
+
+#[allow(non_camel_case_types, dead_code, reason = "ffi type")]
+#[repr(C)]
+union sigval {
+    sival_int: i32,
+    sival_ptr: *const c_void,
+}
+
+unsafe extern "C" {
+    fn sigqueue(pid: i32, sig: i32, value: sigval) -> i32;
 }
 
 fn render(
@@ -367,12 +400,11 @@ fn render(
     };
     let state = read_state_file(&state_file, &path).unwrap_or_default();
     log::debug!("{state:?}");
-    let completed = state.enabled_sources_count() == state.completed_sources_count();
-    if completed {
+    if state.version.is_some() {
         // remove the spinner if completed
         cfg.segments.retain(|s| s != "spinner");
     }
-    let mut segments = turbofish::sources::render(&cfg, &path, state);
+    let mut segments = turbofish::sources::render(&cfg, &path, &state.inner);
     log::debug!("{segments:?}");
     segments.push(turbofish::sources::Segment {
         text: String::new(),
@@ -422,8 +454,18 @@ fn render(
     }
     println!();
 
-    if completed && let Some(turbofish_pid) = turbofish_pid {
-        rustix::process::kill_process(turbofish_pid, rustix::process::Signal::USR2).ok();
+    if let Some(version) = state.version
+        && let Some(turbofish_pid) = turbofish_pid
+    {
+        unsafe {
+            sigqueue(
+                turbofish_pid.as_raw_nonzero().get(),
+                Signal::Usr2 as i32,
+                sigval {
+                    sival_int: version as i32,
+                },
+            );
+        };
     }
 
     Ok(())

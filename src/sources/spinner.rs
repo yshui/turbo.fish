@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+
+use crate::sources::UpdateSender;
 #[derive(Debug)]
 pub(crate) struct Source {
     ticker: Vec<char>,
@@ -78,21 +80,11 @@ impl super::Source for Source {
             ticker: cfg.ticker.chars().collect(),
         }
     }
-    async fn start(
-        self,
-        mut tx: super::UpdateSender<Self>,
-        notify: &std::sync::Arc<super::Notify>,
-    ) -> ! {
-        let mut w = notify.waiter();
-        loop {
-            let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-            tx.send(Some(State {
-                start: ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000,
-            }))
-            .await;
-            tx.send(None).await;
-            w.wait().await;
-        }
+    async fn start(&self, _: UpdateSender<Self>) -> Option<State> {
+        let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        Some(State {
+            start: ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000,
+        })
     }
     fn render(&self, _path: &std::path::Path, state: &Self::State) -> Vec<super::Segment> {
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);

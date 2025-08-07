@@ -1,5 +1,4 @@
 use std::{
-    future::Future,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -162,10 +161,10 @@ impl Source {
         .await;
 
         let dirty = whatever!(dirty, "dirty");
-        tx.send(Some(State {
+        tx.send(State {
             dirty: Some(dirty),
             ..Default::default()
-        }))
+        })
         .await;
 
         let description: Result<_, super::Error> = unblock({
@@ -201,8 +200,8 @@ impl Source {
                                 }
                                 Err(e) if e.code() == git2::ErrorCode::Ambiguous => {
                                     log::debug!("len {i} is ambiguous");
-                                    continue
-                                },
+                                    continue;
+                                }
                                 Err(e) => {
                                     log::warn!("odb exists_prefix failed: {e}");
                                     break;
@@ -215,11 +214,11 @@ impl Source {
         })
         .await;
         let description = whatever!(description, "description");
-        tx.send(Some(State {
+        tx.send(State {
             dirty: Some(dirty),
-            description: Some(description),
+            description: Some(description.clone()),
             ..Default::default()
-        }))
+        })
         .await;
         let repo = repo.try_lock().unwrap();
         let head = repo.head().whatever_context("repo head")?;
@@ -274,21 +273,11 @@ impl super::Source for Source {
                 .map(|r| Arc::new(Mutex::new(r))),
         }
     }
-    fn start(
-        self,
-        mut tx: UpdateSender<Source>,
-        notify: &Arc<super::Notify>,
-    ) -> impl Future<Output = !> {
-        let mut waiter = notify.waiter();
-        async move {
-            loop {
-                if let Some(r) = &self.repository {
-                    log_result("git", self.process_once(r, &mut tx).await);
-                }
-                tx.send(None).await;
-                waiter.wait().await;
-            }
+    async fn start(&self, mut tx: UpdateSender<Self>) -> Option<State> {
+        if let Some(r) = &self.repository {
+            log_result("git", self.process_once(r, &mut tx).await);
         }
+        None
     }
     fn render(&self, _path: &Path, state: &State) -> Vec<super::Segment> {
         let Some(desc) = &state.description else {
@@ -301,7 +290,7 @@ impl super::Source for Source {
             None => return vec![],
         };
         vec![super::Segment {
-            text: desc.to_string(),
+            text: format!(" {desc}"),
             separator: true,
             style: anstyle::Style::new()
                 .fg_color(Some(fg.into()))

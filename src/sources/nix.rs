@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::sources::UpdateSender;
+
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State;
 
@@ -50,16 +52,9 @@ impl super::Source for Source {
     ) -> Self {
         Self { cfg }
     }
-    async fn start(
-        self,
-        mut tx: super::UpdateSender<Self>,
-        notify: &std::sync::Arc<super::Notify>,
-    ) -> ! {
-        let mut w = notify.waiter();
-        loop {
-            tx.send(None).await;
-            w.wait().await;
-        }
+
+    async fn start(&self, _: UpdateSender<Self>) -> Option<State> {
+        None
     }
 
     fn render(&self, _path: &std::path::Path, _state: &Self::State) -> Vec<super::Segment> {

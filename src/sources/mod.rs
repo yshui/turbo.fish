@@ -5,13 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     marker::PhantomData,
     path::Path,
-    sync::{
-        Arc,
-        atomic::{self, AtomicU64},
-    },
 };
-
-use async_event::Event;
 
 #[derive(Debug, snafu::Snafu)]
 #[snafu(whatever)]
@@ -25,54 +19,6 @@ pub struct Error {
     backtrace: std::backtrace::Backtrace,
 }
 
-pub struct Notify {
-    revision: AtomicU64,
-    event: Event,
-}
-
-impl Notify {
-    pub fn new() -> Self {
-        Self {
-            revision: AtomicU64::new(0),
-            event: Event::new(),
-        }
-    }
-    fn waiter(self: &Arc<Self>) -> Waiter {
-        Waiter {
-            notify: self.clone(),
-            revision: self.revision.load(atomic::Ordering::Relaxed),
-        }
-    }
-    pub fn notify_all(&self) {
-        self.revision.fetch_add(1, atomic::Ordering::Relaxed);
-        self.event.notify_all();
-    }
-}
-
-impl Default for Notify {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-struct Waiter {
-    notify: Arc<Notify>,
-    revision: u64,
-}
-
-impl Waiter {
-    async fn wait(&mut self) {
-        self.revision = self
-            .notify
-            .event
-            .wait_until(|| {
-                let revision = self.notify.revision.load(atomic::Ordering::Relaxed);
-                (revision != self.revision).then_some(revision)
-            })
-            .await;
-    }
-}
-
 fn log_result<E: std::fmt::Display>(name: &str, result: Result<(), E>) {
     match result {
         Ok(()) => (),
@@ -80,11 +26,11 @@ fn log_result<E: std::fmt::Display>(name: &str, result: Result<(), E>) {
     }
 }
 
-pub mod vcs;
 pub mod nix;
 pub mod short_path;
 pub mod spinner;
 pub mod status;
+pub mod vcs;
 
 fn default_separator_chars() -> String {
     "".into()
@@ -113,11 +59,11 @@ struct UpdateSender<Source>(Sender<Update>, PhantomData<Source>);
 macro_rules! define_sources {
     (struct Sources { $($name:ident: $t:ty,)* }) => {
         #[derive(Debug)]
-        struct Sources {
+        pub struct Sources {
             $($name: Option<$t>,)*
         }
         impl Sources {
-            fn new(cfg: &Config, path: &Path) -> Self {
+            pub fn new(cfg: &Config, path: &Path) -> Self {
                 let all_source_names = cfg
                     .segments
                     .iter()
@@ -134,7 +80,8 @@ macro_rules! define_sources {
         $(paste! {
             impl UpdateSender<$name::Source> {
                 /// Sending None signals one round of updates has completed.
-                async fn send(&mut self, update: Option<$name::State>) {
+                #[allow(dead_code, reason = "generic code, might not be used")]
+                async fn send(&mut self, update: $name::State) {
                     self.0.send(Update::[<$name:camel>](update)).await.unwrap();
                 }
             }
@@ -143,25 +90,6 @@ macro_rules! define_sources {
         #[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
         pub struct State {
             $($name: <$t as Source>::State,)*
-            enabled_sources_count: u8,
-            completed_sources_count: u8,
-        }
-        impl State {
-            pub fn enabled_sources_count(&self) -> u8 {
-                self.enabled_sources_count
-            }
-            pub fn completed_sources_count(&self) -> u8 {
-                self.completed_sources_count
-            }
-            pub fn clear_completed_sources(&mut self) {
-                self.completed_sources_count = 0;
-            }
-            pub fn init(cfg: &Config) -> Self {
-                Self {
-                    enabled_sources_count: cfg.segments.len() as u8,
-                    ..Default::default()
-                }
-            }
         }
         #[derive(Debug, Serialize, Deserialize, Default)]
         pub struct Config {
@@ -202,29 +130,34 @@ macro_rules! define_sources {
         }
 
         paste! {
-            #[derive(Debug)]
+            #[derive(Debug, PartialEq, Eq)]
             #[allow(private_interfaces)]
             pub enum Update {
-                $([<$name:camel>](Option<<$t as Source>::State>)),*
+                $([<$name:camel>](<$t as Source>::State)),*
             }
 
             pub async fn start(
-                cfg: &Config,
-                path: &Path,
-                tx: &Sender<Update>,
-                notify: &Arc<Notify>,
-            ) -> ! {
+                sources: &Sources,
+                tx: Sender<Update>,
+            ) {
                 use futures_util::StreamExt;
-                let Sources { $($name,)* } = Sources::new(cfg, path);
                 let mut runner = FuturesUnordered::new();
                 $(
-                    if let Some(src) = $name {
+                    if let Some(src) = &sources.$name {
                         use futures_util::FutureExt;
-                        runner.push(src.start(UpdateSender(tx.clone(), PhantomData), notify).boxed());
+                        runner.push(
+                            src
+                                .start(UpdateSender(tx.clone(), PhantomData))
+                                .map(|s| s.map(Update::[<$name:camel>]))
+                                .boxed()
+                        );
                     }
                 )*
-                loop {
-                    runner.next().await;
+                while let Some(update) = runner.next().await {
+                    if let Some(update) = update {
+                        tx.send(update).await.unwrap();
+                    }
+                    log::debug!("~~ {}", runner.len());
                 }
             }
 
@@ -249,7 +182,7 @@ macro_rules! define_sources {
             pub fn render(
                 cfg: &Config,
                 path: &Path,
-                state: State,
+                state: &State,
             ) -> Vec<Segment> {
                 let segments = cfg.segments.clone();
                 let sources = Sources::new(cfg, path);
@@ -263,16 +196,11 @@ macro_rules! define_sources {
             impl State {
                 pub fn update(&mut self, update: Update) -> bool {
                     match update {
-                        $(Update::[<$name:camel>](inner) => if let Some(inner) = inner {
-                            if &self.$name != &inner {
-                                self.$name = inner;
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            self.completed_sources_count += 1;
+                        $(Update::[<$name:camel>](inner) => if &self.$name != &inner {
+                            self.$name = inner;
                             true
+                        } else {
+                            false
                         }),*
                     }
                 }
@@ -505,13 +433,18 @@ trait Source: Sized {
     ///
     /// - name: name of the source.
     /// - path: working directory.
-    /// - tx: channel for sending updatas to the main application.
+    /// - tx: channel for sending progressive updatas to the main application. It's fine to not
+    ///       use this and only return a final state.
     /// - notify: used to notify the source to start refreshing.
+    ///
+    /// # Return
+    ///
+    /// The final state. If `None`, the last state update sent to `tx` will be used. If none was
+    /// ever sent, then `State::default()` will be used.
     fn start(
-        self,
+        &self,
         tx: UpdateSender<Self>,
-        notify: &Arc<Notify>,
-    ) -> impl std::future::Future<Output = !>;
+    ) -> impl std::future::Future<Output = Option<Self::State>>;
 
     fn render(&self, path: &Path, state: &Self::State) -> Vec<Segment>;
 }

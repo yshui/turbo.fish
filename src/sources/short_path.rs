@@ -2,7 +2,6 @@ use futures_util::StreamExt;
 use snafu::ensure;
 use std::{
     ffi::{OsStr, OsString},
-    future::Future,
     os::unix::ffi::OsStrExt,
     path::{Component, Path, PathBuf},
 };
@@ -268,11 +267,7 @@ impl super::Source for Source {
             highlight_patterns,
         }
     }
-    fn start(
-        self,
-        mut tx: UpdateSender<Source>,
-        notify: &std::sync::Arc<super::Notify>,
-    ) -> impl Future<Output = !> {
+    async fn start(&self, _: UpdateSender<Self>) -> Option<State> {
         let (result_base, base, rest) = if let Some(home) = std::env::var_os("HOME")
             && let Ok(rest) = self.path.strip_prefix(Path::new(&home))
         {
@@ -285,21 +280,15 @@ impl super::Source for Source {
             )
         };
         let rest = rest.to_path_buf();
-        let mut wait = notify.waiter();
-        async move {
-            loop {
-                let mut result = result_base.clone();
-                match self.shorten_path(&base, &rest, &mut result).await {
-                    Ok(()) => {
-                        log::debug!("shortened path: {:?}", result);
-                        tx.send(Some(result)).await;
-                        tx.send(None).await;
-                    }
-                    Err(e) => {
-                        log::warn!("failed to shorten path: {e}");
-                    }
-                }
-                wait.wait().await;
+        let mut result = result_base.clone();
+        match self.shorten_path(&base, &rest, &mut result).await {
+            Ok(()) => {
+                log::debug!("shortened path: {:?}", result);
+                Some(result)
+            }
+            Err(e) => {
+                log::warn!("failed to shorten path: {e}");
+                None
             }
         }
     }

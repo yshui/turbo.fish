@@ -318,11 +318,18 @@ impl super::Source for Source {
         };
 
         let mut before_highlight = String::new();
-        for p in &state.short_path[..highlight] {
+        for i in 0..highlight {
             if state.absolute || !before_highlight.is_empty() {
                 before_highlight.push('/')
             }
-            before_highlight.push_str(&p.abbreviated.to_string_lossy());
+            before_highlight.push_str(
+                &(if i == state.short_path.len() - 1 && !self.cfg.abbreviate_basename {
+                    &state.short_path[i].full
+                } else {
+                    &state.short_path[i].abbreviated
+                })
+                .to_string_lossy(),
+            );
         }
         if highlight < state.short_path.len() && (state.absolute || !before_highlight.is_empty()) {
             before_highlight.push('/')

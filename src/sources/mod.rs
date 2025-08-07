@@ -1,4 +1,4 @@
-use async_channel::Sender;
+use futures_channel::mpsc::UnboundedSender as Sender;
 use futures_util::stream::FuturesUnordered;
 use paste::paste;
 use serde::{Deserialize, Serialize};
@@ -81,8 +81,8 @@ macro_rules! define_sources {
             impl UpdateSender<$name::Source> {
                 /// Sending None signals one round of updates has completed.
                 #[allow(dead_code, reason = "generic code, might not be used")]
-                async fn send(&mut self, update: $name::State) {
-                    self.0.send(Update::[<$name:camel>](update)).await.unwrap();
+                fn send(&mut self, update: $name::State) {
+                    self.0.unbounded_send(Update::[<$name:camel>](update)).unwrap();
                 }
             }
         })*
@@ -155,7 +155,7 @@ macro_rules! define_sources {
                 )*
                 while let Some(update) = runner.next().await {
                     if let Some(update) = update {
-                        tx.send(update).await.unwrap();
+                        tx.unbounded_send(update).unwrap();
                     }
                     log::debug!("~~ {}", runner.len());
                 }

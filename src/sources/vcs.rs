@@ -164,8 +164,7 @@ impl Source {
         tx.send(State {
             dirty: Some(dirty),
             ..Default::default()
-        })
-        .await;
+        });
 
         let description: Result<_, super::Error> = unblock({
             let repo = repo.clone();
@@ -218,8 +217,7 @@ impl Source {
             dirty: Some(dirty),
             description: Some(description.clone()),
             ..Default::default()
-        })
-        .await;
+        });
         let repo = repo.try_lock().unwrap();
         let head = repo.head().whatever_context("repo head")?;
         log::debug!(

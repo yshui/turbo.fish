@@ -239,7 +239,7 @@ async fn serve_once(
         let mut timer = <_ as StreamExt>::fuse(async_io::Timer::interval(Duration::from_millis(
             cfg.spinner_interval_ms(),
         )));
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, rx) = futures_channel::mpsc::unbounded();
         let mut jobs = turbofish::sources::start(&sources, tx).boxed().fuse();
         pin_mut!(rx);
         loop {
@@ -333,7 +333,7 @@ async fn debug_state(
     cfg: turbofish::sources::Config,
     path: Option<PathBuf>,
 ) -> Result<(), Whatever> {
-    let (tx, rx) = async_channel::unbounded();
+    let (tx, mut rx) = futures_channel::mpsc::unbounded();
     let pid = rustix::process::getppid().unwrap();
 
     log::debug!("{path:?}");
@@ -350,7 +350,7 @@ async fn debug_state(
     let sources = turbofish::sources::Sources::new(&cfg, &status.path);
     turbofish::sources::start(&sources, tx).await;
 
-    while let Ok(msg) = rx.recv().await {
+    while let Some(msg) = rx.next().await {
         log::debug!("{msg:?}");
         status.inner.update(msg);
     }

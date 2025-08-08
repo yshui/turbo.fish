@@ -218,7 +218,7 @@ async fn serve_once(
         async_signal_with_info::Signals::new([Signal::Usr1, Signal::Usr2, Signal::Hup])
             .whatever_context("create notifying signal")?
             .fuse();
-    'outer: loop {
+    loop {
         let mut timer = <_ as StreamExt>::fuse(async_io::Timer::interval(Duration::from_millis(
             cfg.spinner_interval_ms(),
         )));
@@ -232,15 +232,15 @@ async fn serve_once(
                         .whatever_context("signal stream ended")?;
                     let sig = sig
                         .whatever_context("error reading signal")?;
-                    let new_path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
-                        .whatever_context("read_link cwd")?;
-                    if new_path != status.path {
-                        break 'outer;
-                    }
                     match sig {
                         Signal::Usr1 => {
                             status.version = None;
                             write_state_file(state_file, &status)?;
+                            let new_path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
+                                .whatever_context(format!("read_link cwd {sig:?}"))?;
+                            if new_path != status.path {
+                                return Ok(false)
+                            }
                             version = version.wrapping_add(1);
                             rustix::process::pidfd_send_signal(pg, rustix::process::Signal::USR1)
                                 .whatever_context("signal shell redraw")?;
@@ -293,7 +293,6 @@ async fn serve_once(
             }
         }
     }
-    Ok(false)
 }
 
 async fn serve(cfg: turbofish::sources::Config, state_file: PathBuf) {

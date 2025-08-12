@@ -194,10 +194,23 @@ impl super::Source for Source {
         futures_util::future::ok(priority)
     }
     fn render(&self, path: &super::PathInfos, _state: &State) -> Vec<super::Segment> {
-        //result.short_path.push(PathSegment {
-        //    abbreviated: OsStr::from_bytes(&c.as_bytes()[..shortened]).to_os_string(),
-        //    full: c.to_os_string(),
-        //});
+        let normal_style = anstyle::Style::new()
+            .fg_color(Some(self.cfg.fg.dim(0.9).into()))
+            .bg_color(Some(self.cfg.bg.into()))
+            .effects(anstyle::Effects::new());
+
+        if path.segments.is_empty() {
+            return vec![super::Segment {
+                text: if let PathRoot::Home(home) = &path.root {
+                    format!("~/{}", path.full_path.strip_prefix(home).unwrap().display())
+                } else {
+                    path.full_path.display().to_string()
+                }
+                .into(),
+                style: normal_style,
+                separator: true,
+            }];
+        }
         let mut ret = Vec::new();
         let max_priority = path.segments.iter().map(|s| s.priority).max().unwrap();
         let highlight_pos = (max_priority > 0).then(|| {
@@ -211,10 +224,6 @@ impl super::Source for Source {
             .fg_color(Some(self.cfg.fg.into()))
             .bg_color(Some(self.cfg.bg.into()))
             .bold();
-        let normal_style = anstyle::Style::new()
-            .fg_color(Some(self.cfg.fg.dim(0.9).into()))
-            .bg_color(Some(self.cfg.bg.into()))
-            .effects(anstyle::Effects::new());
 
         if let PathRoot::Home(_) = path.root {
             ret.push(Segment {

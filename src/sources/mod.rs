@@ -316,16 +316,7 @@ pub struct PathInfos {
 impl PathInfos {
     /// Create a state from a path quickly without doing I/O.
     fn new(path: &Path) -> Self {
-        let home = std::env::var_os("HOME");
-        let (root, rest) = if let Some(home) = home
-            && let Ok(path) = path.strip_prefix(&home)
-        {
-            (PathRoot::Home(home.into()), path)
-        } else {
-            (PathRoot::Root, path.strip_prefix("/").unwrap())
-        };
-
-        let full_path = path.into();
+        let (ret, rest) = Self::empty_impl(path);
         let mut segments = vec![Default::default()];
         for c in rest.components() {
             let c = match c {
@@ -344,17 +335,32 @@ impl PathInfos {
 
         Self {
             segments,
-            full_path,
-            root,
             inner,
+            ..ret
         }
     }
 
+    fn empty_impl(path: &Path) -> (Self, &Path) {
+        let home = std::env::var_os("HOME");
+        let (root, rest) = if let Some(home) = home
+            && let Ok(path) = path.strip_prefix(&home)
+        {
+            (PathRoot::Home(home.into()), path)
+        } else {
+            (PathRoot::Root, path.strip_prefix("/").unwrap())
+        };
+
+        (
+            Self {
+                full_path: path.to_path_buf(),
+                root,
+                ..Default::default()
+            },
+            rest,
+        )
+    }
     pub fn empty(path: &Path) -> Self {
-        Self {
-            full_path: path.to_path_buf(),
-            ..Default::default()
-        }
+        Self::empty_impl(path).0
     }
 }
 

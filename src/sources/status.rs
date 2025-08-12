@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    color::{Ansi, Color, Rgb},
-    sources::UpdateSender,
-};
+use crate::color::{Ansi, Color, Rgb};
 
 #[derive(Debug)]
 pub struct Source {
@@ -79,7 +76,8 @@ impl Source {
                 bg_jobs
             } else {
                 self.cfg.jobs_symbol.clone()
-            },
+            }
+            .into(),
             style: anstyle::Style::new()
                 .bg_color(Some(self.cfg.bg.into()))
                 .fg_color(Some(self.cfg.jobs_fg.into()))
@@ -104,17 +102,17 @@ impl Source {
         })
     }
 }
-
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub(crate) struct PathInfo;
+impl super::PathInfo for PathInfo {}
 impl super::Source for Source {
     type Config = Config;
     type State = State;
+    type PathInfo = PathInfo;
     fn new(cfg: &Config, _global_cfg: &super::GlobalConfig, _path: &std::path::Path) -> Self {
         Source { cfg: cfg.clone() }
     }
-    async fn start(&self, _: UpdateSender<Self>) -> Option<State> {
-        None
-    }
-    fn render(&self, _path: &std::path::Path, State: &Self::State) -> Vec<super::Segment> {
+    fn render(&self, _path: &super::PathInfos, State: &Self::State) -> Vec<super::Segment> {
         let it = self.render_nonzero().into_iter();
         let mut it = it.chain(self.render_bg_jobs());
         let mut joined_segments = Vec::new();

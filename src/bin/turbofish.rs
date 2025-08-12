@@ -14,6 +14,7 @@ use std::{
     sync::LazyLock,
     time::Duration,
 };
+use turbofish::sources::PathInfos;
 
 struct AutoDeleteTmp<'a>(Option<&'a std::path::Path>);
 impl Drop for AutoDeleteTmp<'_> {
@@ -111,7 +112,7 @@ fn state_file_path() -> Result<PathBuf, Whatever> {
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 struct State {
-    path: PathBuf,
+    path_info: turbofish::sources::PathInfos,
     inner: turbofish::sources::State,
     /// A version tag, `None` if update is still in progress. Only makes sense
     /// if matches the cwd of the renderer, because otherwise the renderer will disregard
@@ -189,11 +190,11 @@ fn read_state_file(path: &Path, cwd: &Path) -> Result<State, Whatever> {
         let state: State =
             bincode::serde::decode_from_std_read(&mut f, bincode::config::standard())
                 .whatever_context("decode state file")?;
-        if state.path == cwd {
+        if state.path_info.full_path == cwd {
             state
         } else {
             State {
-                path: cwd.to_path_buf(),
+                path_info: PathInfos::empty(cwd),
                 ..Default::default()
             }
         }
@@ -206,13 +207,16 @@ async fn serve_once(
     pg: &Async<OwnedFd>,
 ) -> Result<bool, Whatever> {
     let mut version = 0u32;
-    let mut status = State {
-        path: std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
-            .whatever_context("read_link cwd")?,
+    let path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
+        .whatever_context("read_link cwd")?;
+    let sources = turbofish::sources::Sources::new(cfg, &path);
+    let path_info = sources.walk_cwd(&path).await?;
+    let mut state = State {
+        path_info,
         inner: turbofish::sources::State::default(),
         version: None,
     };
-    let sources = turbofish::sources::Sources::new(cfg, &status.path);
+    write_state_file(state_file, &state)?;
 
     let mut signal =
         async_signal_with_info::Signals::new([Signal::Usr1, Signal::Usr2, Signal::Hup])
@@ -223,7 +227,9 @@ async fn serve_once(
             cfg.spinner_interval_ms(),
         )));
         let (tx, rx) = futures_channel::mpsc::unbounded();
-        let mut jobs = turbofish::sources::start(&sources, tx).boxed().fuse();
+        let mut jobs = sources.run(&state.path_info, tx)
+            .boxed()
+            .fuse();
         pin_mut!(rx);
         loop {
             let updated = select! {
@@ -234,11 +240,11 @@ async fn serve_once(
                         .whatever_context("error reading signal")?;
                     match sig {
                         Signal::Usr1 => {
-                            status.version = None;
-                            write_state_file(state_file, &status)?;
+                            state.version = None;
+                            write_state_file(state_file, &state)?;
                             let new_path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
                                 .whatever_context(format!("read_link cwd {sig:?}"))?;
-                            if new_path != status.path {
+                            if new_path != state.path_info.full_path {
                                 return Ok(false)
                             }
                             version = version.wrapping_add(1);
@@ -272,8 +278,8 @@ async fn serve_once(
                 msg = rx.next() => {
                     log::debug!("{msg:?}");
                     if let Some(msg) = msg {
-                        status.inner.update(msg);
-                        write_state_file(state_file, &status)?;
+                        state.inner.update(msg);
+                        write_state_file(state_file, &state)?;
                         true
                     } else {
                         false
@@ -282,8 +288,8 @@ async fn serve_once(
                 // `jobs` completion means all update jobs are finished, we can set the version
                 // tag in state.
                 _ = jobs => {
-                    status.version = Some(version);
-                    write_state_file(state_file, &status)?;
+                    state.version = Some(version);
+                    write_state_file(state_file, &state)?;
                     true
                 }
             };
@@ -328,31 +334,34 @@ async fn debug_state(
     let pid = rustix::process::getppid().unwrap();
 
     log::debug!("{path:?}");
-    let mut status = State {
-        path: if let Some(path) = path {
-            path
-        } else {
-            std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
-                .whatever_context("read_link cwd")?
-        },
+    let path = if let Some(path) = path {
+        path
+    } else {
+        std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
+            .whatever_context("read_link cwd")?
+    };
+    let sources = turbofish::sources::Sources::new(&cfg, &path);
+    let path_info = sources.walk_cwd(&path).await?;
+    log::debug!("{path_info:?}");
+    let mut state = State {
+        path_info,
         inner: turbofish::sources::State::default(),
         version: None,
     };
-    let sources = turbofish::sources::Sources::new(&cfg, &status.path);
-    turbofish::sources::start(&sources, tx).await;
+    sources.run(&state.path_info, tx).await;
 
     while let Some(msg) = rx.next().await {
         log::debug!("{msg:?}");
-        status.inner.update(msg);
+        state.inner.update(msg);
     }
-    status.version = Some(0);
-    log::debug!("final state: {status:?}");
+    state.version = Some(0);
+    log::debug!("final state: {state:?}");
     write_state_file(
         std::env::args()
             .nth(2)
             .whatever_context("not enough arguments")?
             .as_ref(),
-        &status,
+        &state,
     )?;
     Ok(())
 }
@@ -395,10 +404,10 @@ fn render(
         // remove the spinner if completed
         cfg.segments.retain(|s| s != "spinner");
     }
-    let mut segments = turbofish::sources::render(&cfg, &path, &state.inner);
+    let mut segments = turbofish::sources::render(&cfg, &state.path_info, &state.inner);
     log::debug!("{segments:?}");
     segments.push(turbofish::sources::Segment {
-        text: String::new(),
+        text: Default::default(),
         style: anstyle::Style::new(),
         separator: false,
     });

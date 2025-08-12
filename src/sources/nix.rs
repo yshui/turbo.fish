@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    color::{Color, Rgb},
-    sources::UpdateSender,
-};
+use crate::color::{Color, Rgb};
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 pub(crate) struct State;
@@ -45,9 +42,15 @@ pub struct Source {
     cfg: Config,
 }
 
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub(crate) struct PathInfo;
+
+impl super::PathInfo for PathInfo {}
+
 impl super::Source for Source {
     type State = State;
     type Config = Config;
+    type PathInfo = PathInfo;
     fn new(
         &cfg: &Self::Config,
         _global_cfg: &super::GlobalConfig,
@@ -56,16 +59,12 @@ impl super::Source for Source {
         Self { cfg }
     }
 
-    async fn start(&self, _: UpdateSender<Self>) -> Option<State> {
-        None
-    }
-
-    fn render(&self, _path: &std::path::Path, _state: &Self::State) -> Vec<super::Segment> {
+    fn render(&self, _path: &super::PathInfos, _state: &Self::State) -> Vec<super::Segment> {
         let Ok(nix) = std::env::var("IN_NIX_SHELL") else {
             return vec![];
         };
         vec![super::Segment {
-            text: nix,
+            text: nix.into(),
             style: anstyle::Style::new()
                 .fg_color(Some(self.cfg.fg.into()))
                 .bg_color(Some(self.cfg.bg.into()))

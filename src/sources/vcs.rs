@@ -80,6 +80,10 @@ fn default_git_short_hash_min() -> u32 {
     5
 }
 
+fn default_root_priority() -> u64 {
+    5
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct Config {
     #[serde(default = "default_dirty_bg")]
@@ -97,6 +101,9 @@ pub struct Config {
     /// Minimal length a git commit hash can be shortened to.
     #[serde(default = "default_git_short_hash_min")]
     git_short_hash_min: u32,
+
+    #[serde(default = "default_root_priority")]
+    root_priority: u64,
 }
 
 impl Default for Config {
@@ -109,28 +116,14 @@ impl Default for Config {
             staged_fg: default_staged_fg(),
             staged_bg: default_staged_bg(),
             git_short_hash_min: default_git_short_hash_min(),
+            root_priority: default_root_priority(),
         }
     }
 }
 
+#[derive(Debug)]
 pub struct Source {
-    repository: Option<Arc<Mutex<git2::Repository>>>,
     cfg: Config,
-}
-
-impl std::fmt::Debug for Source {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Source")
-            .field(
-                "repository",
-                &(self
-                    .repository
-                    .as_ref()
-                    .map(|r| r as *const _)
-                    .unwrap_or_default()),
-            )
-            .finish()
-    }
 }
 
 impl Source {
@@ -261,24 +254,71 @@ impl Source {
         Ok(())
     }
 }
+#[derive(Deserialize, Serialize, Default)]
+pub(crate) struct PathInfo {
+    #[serde(skip)]
+    repository: Option<Arc<Mutex<git2::Repository>>>,
+}
+impl super::PathInfo for PathInfo {}
+
+impl std::fmt::Debug for PathInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Ellipsis;
+        impl std::fmt::Debug for Ellipsis {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("…")
+            }
+        }
+        f.debug_struct("PathInfo")
+            .field("repository", &self.repository.as_ref().map(|_| Ellipsis))
+            .finish()
+    }
+}
 impl super::Source for Source {
     type State = State;
     type Config = Config;
-    fn new(&cfg: &Config, _global_cfg: &GlobalConfig, path: &Path) -> Self {
-        Self {
-            cfg,
-            repository: git2::Repository::open(path)
-                .ok()
-                .map(|r| Arc::new(Mutex::new(r))),
-        }
+    type PathInfo = PathInfo;
+    fn new(&cfg: &Config, _global_cfg: &GlobalConfig, _path: &Path) -> Self {
+        Self { cfg }
     }
-    async fn start(&self, mut tx: UpdateSender<Self>) -> Option<State> {
-        if let Some(r) = &self.repository {
+    async fn walk_path(
+        &self,
+        parent: &Path,
+        _current_child: &std::ffi::OsStr,
+        child: &std::ffi::OsStr,
+        info: &mut PathInfo,
+        _index: usize,
+    ) -> Result<u64, super::Error> {
+        Ok(if info.repository.is_some() {
+            0
+        } else if child == ".git" {
+            info.repository = match git2::Repository::open(parent) {
+                Ok(repo) => Some(Arc::new(Mutex::new(repo))),
+                Err(e) => {
+                    log::warn!("Failed to open repo at {}: {e}", parent.display());
+                    None
+                }
+            };
+            if info.repository.is_some() {
+                self.cfg.root_priority
+            } else {
+                0
+            }
+        } else {
+            0
+        })
+    }
+    async fn run_with_path_info(
+        &self,
+        path_infos: &super::PathInfos,
+        mut tx: UpdateSender<Self>,
+    ) -> Option<Self::State> {
+        if let Some(r) = &path_infos.inner.vcs.repository {
             log_result("git", self.process_once(r, &mut tx).await);
         }
         None
     }
-    fn render(&self, _path: &Path, state: &State) -> Vec<super::Segment> {
+    fn render(&self, _path: &super::PathInfos, state: &State) -> Vec<super::Segment> {
         let Some(desc) = &state.description else {
             return vec![];
         };
@@ -289,7 +329,7 @@ impl super::Source for Source {
             None => return vec![],
         };
         vec![super::Segment {
-            text: format!(" {desc}"),
+            text: format!(" {desc}").into(),
             separator: true,
             style: anstyle::Style::new()
                 .fg_color(Some(fg.into()))

@@ -74,22 +74,31 @@ impl Default for Config {
     }
 }
 
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub(crate) struct PathInfo;
+
+impl super::PathInfo for PathInfo {}
+
 impl super::Source for Source {
     type State = State;
     type Config = Config;
+    type PathInfo = PathInfo;
+
     fn new(cfg: &Self::Config, _global_cfg: &super::GlobalConfig, _path: &std::path::Path) -> Self {
         Self {
             cfg: cfg.clone(),
             ticker: cfg.ticker.chars().collect(),
         }
     }
-    async fn start(&self, _: UpdateSender<Self>) -> Option<State> {
+
+    async fn run(&self, _: UpdateSender<Self>) -> Option<State> {
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
         Some(State {
             start: ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000,
         })
     }
-    fn render(&self, _path: &std::path::Path, state: &Self::State) -> Vec<super::Segment> {
+
+    fn render(&self, _path: &super::PathInfos, state: &Self::State) -> Vec<super::Segment> {
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
         let now = ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000;
         let elapsed = (now - state.start).unsigned_abs();
@@ -98,7 +107,8 @@ impl super::Source for Source {
         }
         vec![super::Segment {
             text: self.ticker[(elapsed / self.cfg.interval_ms) as usize % self.ticker.len()]
-                .to_string(),
+                .to_string()
+                .into(),
             style: anstyle::Style::new()
                 .fg_color(Some(self.cfg.fg.into()))
                 .bg_color(Some(self.cfg.bg.into())),

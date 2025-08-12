@@ -387,8 +387,10 @@ impl Sources {
             infos.segments[i].priority = self
                 .walk_cwd_one(curr, current_child, &entries, &mut infos.inner, i)
                 .await?;
-            current_child = curr.file_name().unwrap();
-            curr = curr.parent().unwrap();
+            if i != 0 {
+                current_child = curr.file_name().unwrap();
+                curr = curr.parent().unwrap();
+            }
         }
         Ok(infos)
     }

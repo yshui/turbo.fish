@@ -18,7 +18,7 @@ impl super::Config {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
 pub(crate) struct State {
-    start: i64,
+    start: Option<i64>,
 }
 
 fn default_spinner_fg() -> Color {
@@ -94,14 +94,17 @@ impl super::Source for Source {
     async fn run(&self, _: UpdateSender<Self>) -> Option<State> {
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
         Some(State {
-            start: ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000,
+            start: Some(ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000),
         })
     }
 
     fn render(&self, _path: &super::PathInfos, state: &Self::State) -> Vec<super::Segment> {
+        let Some(start) = state.start else {
+            return vec![];
+        };
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
         let now = ts.tv_sec * 1000 + ts.tv_nsec / 1_000_000;
-        let elapsed = (now - state.start).unsigned_abs();
+        let elapsed = (now - start).unsigned_abs();
         if elapsed < self.cfg.delay_ms {
             return vec![];
         }

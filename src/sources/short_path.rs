@@ -48,7 +48,6 @@ fn default_path_fg() -> Color {
 
 fn default_root_patterns() -> Vec<RootPattern> {
     [
-        ".git",
         ".clangd",
         "compile_commands.json",
         "requirements.txt",

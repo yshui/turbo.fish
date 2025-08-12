@@ -176,8 +176,8 @@ fn write_state_file(path: &Path, data: &State) -> Result<(), Whatever> {
     }
     Ok(())
 }
-fn read_state_file(path: &Path, cwd: &Path) -> Result<State, Whatever> {
-    try {
+fn read_state_file_or_empty(path: &Path, cwd: &Path) -> State {
+    let state: Result<State, Whatever> = try {
         log::debug!("{}", path.display());
         let f = rustix::fs::openat(
             &*TMPDIR_FD,
@@ -187,18 +187,21 @@ fn read_state_file(path: &Path, cwd: &Path) -> Result<State, Whatever> {
         )
         .whatever_context("open state file")?;
         let mut f = unsafe { utils::Fd::new(f) };
-        let state: State =
-            bincode::serde::decode_from_std_read(&mut f, bincode::config::standard())
-                .whatever_context("decode state file")?;
-        if state.path_info.full_path == cwd {
-            state
-        } else {
-            State {
-                path_info: PathInfos::empty(cwd),
-                ..Default::default()
-            }
+        bincode::serde::decode_from_std_read(&mut f, bincode::config::standard())
+            .whatever_context("decode state file")?
+    };
+    match state {
+        Ok(state) if state.path_info.full_path == cwd => Some(state),
+        Err(e) => {
+            log::debug!("failed to load state file: {e}");
+            None
         }
+        Ok(_) => None,
     }
+    .unwrap_or_else(|| State {
+        path_info: PathInfos::empty(cwd),
+        ..Default::default()
+    })
 }
 async fn serve_once(
     cfg: &turbofish::sources::Config,
@@ -227,9 +230,7 @@ async fn serve_once(
             cfg.spinner_interval_ms(),
         )));
         let (tx, rx) = futures_channel::mpsc::unbounded();
-        let mut jobs = sources.run(&state.path_info, tx)
-            .boxed()
-            .fuse();
+        let mut jobs = sources.run(&state.path_info, tx).boxed().fuse();
         pin_mut!(rx);
         loop {
             let updated = select! {
@@ -398,7 +399,7 @@ fn render(
         std::fs::read_link(format!("/proc/{}/cwd", ppid.as_raw_nonzero()))
             .whatever_context("read cwd")?
     };
-    let state = read_state_file(&state_file, &path).unwrap_or_default();
+    let state = read_state_file_or_empty(&state_file, &path);
     log::debug!("{state:?}");
     if state.version.is_some() {
         // remove the spinner if completed

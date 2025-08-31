@@ -101,6 +101,9 @@ pub struct Config {
     /// Minimal length a git commit hash can be shortened to.
     #[serde(default = "default_git_short_hash_min")]
     git_short_hash_min: u32,
+    /// Whether untracked files are considered dirty.
+    #[serde(default)]
+    git_untracked_is_dirty: bool,
 
     #[serde(default = "default_root_priority")]
     root_priority: u64,
@@ -116,6 +119,7 @@ impl Default for Config {
             staged_fg: default_staged_fg(),
             staged_bg: default_staged_bg(),
             git_short_hash_min: default_git_short_hash_min(),
+            git_untracked_is_dirty: Default::default(),
             root_priority: default_root_priority(),
         }
     }
@@ -132,6 +136,10 @@ impl Source {
         repo: &Arc<Mutex<Repository>>,
         tx: &mut UpdateSender<Source>,
     ) -> Result<(), super::Error> {
+        let Config {
+            git_untracked_is_dirty,
+            ..
+        } = self.cfg;
         let dirty: Result<_, super::Error> = unblock({
             let repo = repo.clone();
             move || try {
@@ -145,20 +153,19 @@ impl Source {
                     }
                 }
                 use git2::Status;
+                let mut dirty_bits = Status::WT_MODIFIED
+                    | Status::WT_DELETED
+                    | Status::WT_RENAMED
+                    | Status::WT_TYPECHANGE;
+                if git_untracked_is_dirty {
+                    dirty_bits |= Status::WT_NEW;
+                }
                 if statuses
                     .iter()
                     .any(|s| s.status().contains(Status::CONFLICTED))
                 {
                     Dirty::Dirty { conflicted: true }
-                } else if statuses.iter().any(|s| {
-                    s.status().intersects(
-                        Status::WT_MODIFIED
-                            | Status::WT_DELETED
-                            | Status::WT_NEW
-                            | Status::WT_RENAMED
-                            | Status::WT_TYPECHANGE,
-                    )
-                }) {
+                } else if statuses.iter().any(|s| s.status().intersects(dirty_bits)) {
                     Dirty::Dirty { conflicted: false }
                 } else if statuses.iter().any(|s| {
                     s.status().contains(

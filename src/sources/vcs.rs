@@ -14,7 +14,7 @@ use crate::sources::{GlobalConfig, UpdateSender, log_result};
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dirty {
     /// Repo has unstaged changes
-    Dirty,
+    Dirty { conflicted: bool },
     /// Repo has staged changed
     Staged,
     /// Repo is even with a commit
@@ -139,9 +139,14 @@ impl Source {
                 let statuses = repo.statuses(None).whatever_context("repo statuses")?;
                 if statuses
                     .iter()
+                    .any(|s| s.status() == git2::Status::CONFLICTED)
+                {
+                    Dirty::Dirty { conflicted: true }
+                } else if statuses
+                    .iter()
                     .any(|s| s.status() == git2::Status::WT_MODIFIED)
                 {
-                    Dirty::Dirty
+                    Dirty::Dirty { conflicted: false }
                 } else if statuses
                     .iter()
                     .any(|s| s.status() == git2::Status::INDEX_MODIFIED)
@@ -322,14 +327,18 @@ impl super::Source for Source {
         let Some(desc) = &state.description else {
             return vec![];
         };
-        let (fg, bg) = match state.dirty {
-            Some(Dirty::Dirty) => (self.cfg.dirty_fg, self.cfg.dirty_bg),
-            Some(Dirty::Staged) => (self.cfg.staged_fg, self.cfg.staged_bg),
-            Some(Dirty::Even) => (self.cfg.clean_fg, self.cfg.clean_bg),
+        let (fg, bg, status_bit) = match state.dirty {
+            Some(Dirty::Dirty { conflicted }) => (
+                self.cfg.dirty_fg,
+                self.cfg.dirty_bg,
+                if conflicted { " ✘" } else { "" },
+            ),
+            Some(Dirty::Staged) => (self.cfg.staged_fg, self.cfg.staged_bg, ""),
+            Some(Dirty::Even) => (self.cfg.clean_fg, self.cfg.clean_bg, ""),
             None => return vec![],
         };
         vec![super::Segment {
-            text: format!(" {desc}").into(),
+            text: format!(" {desc}{status_bit}").into(),
             separator: true,
             style: anstyle::Style::new()
                 .fg_color(Some(fg.into()))

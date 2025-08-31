@@ -234,7 +234,13 @@ impl Source {
         );
         if head.is_branch() {
             let b = git2::Branch::wrap(head);
-            let up = b.upstream().whatever_context("upstream")?;
+            let Ok(up) = b.upstream() else {
+                log::debug!(
+                    "branch \"{}\" has no upstream",
+                    b.name().ok().flatten().unwrap_or_default()
+                );
+                return Ok(());
+            };
             log::debug!("{:?}", up.name());
             let mut walk = repo.revwalk().whatever_context("revwalk")?;
 

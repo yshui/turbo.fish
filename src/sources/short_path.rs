@@ -278,7 +278,16 @@ impl super::Source for Source {
                 })
             }
         }
-        ret.last_mut().unwrap().separator = true;
+        if let Some(last) = ret.last_mut() {
+            last.separator = true;
+        } else {
+            // Path is "/"
+            ret.push(Segment {
+                text: "/".into(),
+                style: normal_style,
+                separator: true,
+            })
+        }
         ret
     }
 }

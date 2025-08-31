@@ -137,19 +137,26 @@ impl Source {
             move || try {
                 let repo = repo.lock().unwrap();
                 let statuses = repo.statuses(None).whatever_context("repo statuses")?;
+                if log::log_enabled!(log::Level::Debug) {
+                    for s in statuses.iter() {
+                        if s.status() != git2::Status::IGNORED {
+                            log::debug!("{:?} {:?}", s.path(), s.status())
+                        }
+                    }
+                }
                 if statuses
                     .iter()
-                    .any(|s| s.status() == git2::Status::CONFLICTED)
+                    .any(|s| s.status().contains(git2::Status::CONFLICTED))
                 {
                     Dirty::Dirty { conflicted: true }
                 } else if statuses
                     .iter()
-                    .any(|s| s.status() == git2::Status::WT_MODIFIED)
+                    .any(|s| s.status().contains(git2::Status::WT_MODIFIED))
                 {
                     Dirty::Dirty { conflicted: false }
                 } else if statuses
                     .iter()
-                    .any(|s| s.status() == git2::Status::INDEX_MODIFIED)
+                    .any(|s| s.status().contains(git2::Status::INDEX_MODIFIED))
                 {
                     Dirty::Staged
                 } else {

@@ -144,20 +144,31 @@ impl Source {
                         }
                     }
                 }
+                use git2::Status;
                 if statuses
                     .iter()
-                    .any(|s| s.status().contains(git2::Status::CONFLICTED))
+                    .any(|s| s.status().contains(Status::CONFLICTED))
                 {
                     Dirty::Dirty { conflicted: true }
-                } else if statuses
-                    .iter()
-                    .any(|s| s.status().contains(git2::Status::WT_MODIFIED))
-                {
+                } else if statuses.iter().any(|s| {
+                    s.status().intersects(
+                        Status::WT_MODIFIED
+                            | Status::WT_DELETED
+                            | Status::WT_NEW
+                            | Status::WT_RENAMED
+                            | Status::WT_TYPECHANGE,
+                    )
+                }) {
                     Dirty::Dirty { conflicted: false }
-                } else if statuses
-                    .iter()
-                    .any(|s| s.status().contains(git2::Status::INDEX_MODIFIED))
-                {
+                } else if statuses.iter().any(|s| {
+                    s.status().contains(
+                        Status::INDEX_MODIFIED
+                            | Status::INDEX_DELETED
+                            | Status::INDEX_NEW
+                            | Status::INDEX_RENAMED
+                            | Status::INDEX_TYPECHANGE,
+                    )
+                }) {
                     Dirty::Staged
                 } else {
                     Dirty::Even

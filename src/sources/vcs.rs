@@ -168,7 +168,7 @@ impl Source {
                 } else if statuses.iter().any(|s| s.status().intersects(dirty_bits)) {
                     Dirty::Dirty { conflicted: false }
                 } else if statuses.iter().any(|s| {
-                    s.status().contains(
+                    s.status().intersects(
                         Status::INDEX_MODIFIED
                             | Status::INDEX_DELETED
                             | Status::INDEX_NEW

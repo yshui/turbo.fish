@@ -213,7 +213,13 @@ async fn serve_once(
     let path = std::fs::read_link(format!("/proc/{}/cwd", pid.as_raw_nonzero()))
         .whatever_context("read_link cwd")?;
     let sources = turbofish::sources::Sources::new(cfg, &path);
-    let path_info = sources.walk_cwd(&path).await?;
+    let path_info = sources
+        .walk_cwd(&path)
+        .await
+        .map_err(|e| {
+            log::debug!("walk_cwd failed: {e}");
+        })
+        .unwrap_or_default();
     let mut state = State {
         path_info,
         inner: turbofish::sources::State::default(),

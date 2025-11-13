@@ -140,7 +140,7 @@ macro_rules! define_sources {
             impl UpdateSender<$name::Source> {
                 /// Sending None signals one round of updates has completed.
                 #[allow(dead_code, reason = "generic code, might not be used")]
-                fn send(&mut self, update: $name::State) {
+                fn send(&mut self, update: <$name::Source as $crate::sources::Source>::State) {
                     self.0.unbounded_send(Update::[<$name:camel>](update)).unwrap();
                 }
             }
@@ -287,6 +287,7 @@ define_sources! {
         status: status::Source,
         nix: nix::Source,
         spinner: spinner::Source,
+        hostname: hostname::Source,
     }
 }
 
@@ -411,6 +412,8 @@ trait PathInfo: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug
         Default::default()
     }
 }
+
+impl PathInfo for () {}
 
 trait Source: Sized {
     type State: serde::Serialize + serde::de::DeserializeOwned + Default + Eq + std::fmt::Debug;
